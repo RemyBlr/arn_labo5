@@ -1,4 +1,19 @@
-# PW5 - part 1
+---
+title: "Labo 4 - ARN"
+author: Bleuer Rémy, Duruz Florian
+date: 08.05.2026
+geometry: margin=2cm
+output: pdf_document
+---
+
+<script type="text/javascript" src="http://cdn.mathjax.org/mathjax/latest/MathJax.js?config=TeX-AMS-MML_HTMLorMML"></script>
+<script type="text/x-mathjax-config">
+  MathJax.Hub.Config({ tex2jax: {inlineMath: [['$', '$']]}, messageStyle: "none" });
+</script>
+
+# Labo 5 - Partie 1 - ARN
+**Authors:** Bleuer Rémy, Duruz Florian  
+**Date:** 08.05.2026
 
 ## Intro
 L'objectif de ce TP est d'utiliser le transfer learning pour classifier trois espèces d'oiseaux : Mésange noire, Mésange charbonnière et Moineau. Le modèle de base utilisé est MobileNetV2, pré-entraîné sur ImageNet (1000 classes). Les couches de classification sont remplacées et entraînées sur un petit dataset collecté via Bing (50 images par classe).
@@ -8,7 +23,7 @@ The basic configuration is used and every time i modified a parameter a took a n
 
 ### 1 hidden layer, 256 neurons
 <img src="../assets/part1/kfold_1_hl_256_p.PNG" width="400"/>
-<img src="../assets/part1/matrix_1_hl_256_p.PNG" width="400"/>  
+<img src="../assets/part1/matrix_1_hl_256_p.PNG" width="400"/>
 
 ### 1 hidden layer, 128 neurons, freeze
 <img src="../assets/part1/kfold_1_hl_128_p_f.PNG" width="400"/>
