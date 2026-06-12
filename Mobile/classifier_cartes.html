@@ -1,0 +1,208 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
+<title>Analyseur de cartes</title>
+<script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@4.20.0/dist/tf.min.js"></script>
+<style>
+  :root { --bg:#0f0f12; --panel:#1a1a20; --accent:#3ddc84; --text:#f0f0f0; --muted:#8a8a96; }
+  * { box-sizing:border-box; margin:0; padding:0; -webkit-tap-highlight-color:transparent; }
+  html, body { height:100%; background:var(--bg); color:var(--text);
+    font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif; }
+  body { display:flex; flex-direction:column; overflow:hidden; }
+  header { padding:calc(12px + env(safe-area-inset-top)) 16px 8px; text-align:center;
+    border-bottom:1px solid #26262e; }
+  header h1 { font-size:16px; letter-spacing:2px; text-transform:uppercase; font-weight:700; }
+  header .sub { font-size:11px; color:var(--muted); margin-top:2px; }
+  #stage { position:relative; flex:1; min-height:0; background:#000;
+    display:flex; align-items:center; justify-content:center; overflow:hidden; }
+  #video { width:100%; height:100%; object-fit:cover; }
+  #status { position:absolute; inset:0; display:flex; align-items:center;
+    justify-content:center; text-align:center; padding:24px; font-size:14px;
+    color:var(--muted); background:#000; }
+  /* Grille des 4 attributs, superposée en haut du flux caméra */
+  #attrs { position:absolute; top:12px; left:12px; right:12px;
+    display:none; grid-template-columns:1fr 1fr; gap:8px; }
+  #attrs.show { display:grid; }
+  .attr { background:rgba(0,0,0,0.55); backdrop-filter:blur(8px);
+    border-radius:12px; padding:8px 10px; }
+  .attr .task { font-size:10px; letter-spacing:1px; text-transform:uppercase;
+    color:var(--muted); margin-bottom:2px; }
+  .attr .pred { display:flex; align-items:baseline; justify-content:space-between; gap:6px; }
+  .attr .nm { font-size:15px; font-weight:700; text-transform:capitalize;
+    overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  .attr .nm.uncertain { color:var(--muted); font-weight:500; }
+  .attr .pc { font-size:12px; color:var(--muted); font-variant-numeric:tabular-nums; }
+  .attr .bar-track { height:4px; background:#2a2a33; border-radius:2px;
+    overflow:hidden; margin-top:5px; }
+  .attr .bar-fill { height:100%; width:0%; border-radius:2px; background:var(--accent);
+    transition:width 0.15s ease; }
+  footer { background:var(--panel); padding:12px 16px calc(12px + env(safe-area-inset-bottom));
+    border-top:1px solid #26262e; }
+  .controls { display:flex; gap:10px; align-items:center; }
+  button { flex:0 0 auto; background:#2a2a33; color:var(--text); border:none;
+    border-radius:10px; padding:10px 14px; font-size:13px; font-weight:600; cursor:pointer; }
+  button:active { background:#34343f; }
+  .slider-wrap { flex:1; }
+  .slider-wrap label { font-size:11px; color:var(--muted); display:flex;
+    justify-content:space-between; margin-bottom:4px; }
+  input[type=range] { width:100%; accent-color:var(--accent); }
+</style>
+</head>
+<body>
+  <header>
+    <h1 id="appTitle">Analyseur de cartes</h1>
+    <div class="sub">4 mod&egrave;les &middot; Transfer learning &middot; MobileNetV2</div>
+  </header>
+  <div id="stage">
+    <video id="video" playsinline muted autoplay></video>
+    <div id="status">Chargement des mod&egrave;les&hellip;</div>
+    <div id="attrs"></div>
+  </div>
+  <footer>
+    <div class="controls">
+      <button id="flipBtn">&#8634; Cam&eacute;ra</button>
+      <div class="slider-wrap">
+        <label>Seuil d'incertitude <span id="thVal">60%</span></label>
+        <input type="range" id="thresh" min="0" max="95" value="60" step="5">
+      </div>
+    </div>
+  </footer>
+
+<script>
+/* =====================================================================
+   ====================  BLOC À ÉDITER SI BESOIN  ======================
+   =====================================================================
+
+   TASKS : les 4 classifications. Pour chaque tâche, l'app charge le
+   modèle depuis "model_<tâche>/model.json" et les classes depuis
+   "model_<tâche>/labels.json" (générés par la cellule d'export Colab).
+
+   Arborescence attendue à côté de ce fichier HTML :
+
+     classifier_cartes.html
+     model_couleur/  (model.json + *.bin + labels.json)
+     model_type/
+     model_figure/
+     model_chiffre/
+
+   INPUT_SIZE : 224 pour le MobileNetV2 du cours.
+   ===================================================================== */
+
+const TASKS = ["couleur", "type", "figure", "chiffre"];
+const INPUT_SIZE = 224;
+
+/* =====================================================================
+   ===================  NE RIEN ÉDITER CI-DESSOUS  =====================
+   ===================================================================== */
+
+let stream = null, facing = "environment", threshold = 0.60;
+const models = {}, labels = {};
+const video    = document.getElementById("video");
+const statusEl = document.getElementById("status");
+const attrsEl  = document.getElementById("attrs");
+
+function buildAttrCards() {
+  attrsEl.innerHTML = "";
+  TASKS.forEach(function(task) {
+    const card = document.createElement("div");
+    card.className = "attr";
+    card.innerHTML =
+      '<div class="task">' + task + '</div>' +
+      '<div class="pred"><span class="nm" id="nm-' + task + '">&mdash;</span>' +
+      '<span class="pc" id="pc-' + task + '"></span></div>' +
+      '<div class="bar-track"><div class="bar-fill" id="bf-' + task + '"></div></div>';
+    attrsEl.appendChild(card);
+  });
+}
+
+document.getElementById("thresh").addEventListener("input", function(e) {
+  threshold = e.target.value / 100;
+  document.getElementById("thVal").textContent = e.target.value + "%";
+});
+document.getElementById("flipBtn").addEventListener("click", async function() {
+  facing = facing === "environment" ? "user" : "environment";
+  await startCamera();
+});
+
+async function startCamera() {
+  if (stream) stream.getTracks().forEach(function(t){ t.stop(); });
+  try {
+    stream = await navigator.mediaDevices.getUserMedia({ video:{ facingMode:facing }, audio:false });
+    video.srcObject = stream;
+    await video.play();
+  } catch (err) {
+    statusEl.textContent = "Erreur cam\u00e9ra : " + err.message;
+    statusEl.style.display = "flex";
+  }
+}
+
+async function init() {
+  try {
+    for (const task of TASKS) {
+      statusEl.textContent = "Chargement du mod\u00e8le \u00ab " + task + " \u00bb\u2026";
+      const r = await fetch("model_" + task + "/labels.json");
+      labels[task] = await r.json();
+      models[task] = await tf.loadGraphModel("model_" + task + "/model.json");
+    }
+    buildAttrCards();
+    statusEl.textContent = "D\u00e9marrage de la cam\u00e9ra\u2026";
+    await startCamera();
+    statusEl.style.display = "none";
+    attrsEl.classList.add("show");
+    requestAnimationFrame(loop);
+  } catch (err) {
+    statusEl.textContent = "Impossible de charger les mod\u00e8les. V\u00e9rifie que les dossiers " +
+      "model_couleur/, model_type/, model_figure/ et model_chiffre/ (model.json + .bin + labels.json) " +
+      "sont \u00e0 c\u00f4t\u00e9 de ce fichier. (" + err.message + ")";
+  }
+}
+
+function preprocess() {
+  return tf.tidy(function() {
+    let img = tf.browser.fromPixels(video);
+    const h = img.shape[0], w = img.shape[1];
+    const side = Math.min(h, w);
+    const top  = Math.floor((h - side) / 2);
+    const left = Math.floor((w - side) / 2);
+    img = img.slice([top, left, 0], [side, side, 3]);
+    img = tf.image.resizeBilinear(img, [INPUT_SIZE, INPUT_SIZE]);
+    img = img.toFloat().div(255.0);
+    return img.expandDims(0);
+  });
+}
+
+let busy = false;
+async function loop() {
+  if (!busy && video.readyState >= 2) {
+    busy = true;
+    const input = preprocess();
+    for (const task of TASKS) {
+      const logits = models[task].predict(input);
+      const probs = await logits.data();
+      logits.dispose();
+      render(task, probs);
+    }
+    input.dispose();
+    busy = false;
+  }
+  requestAnimationFrame(loop);
+}
+
+function render(task, probs) {
+  let best = 0;
+  for (let i = 1; i < probs.length; i++) if (probs[i] > probs[best]) best = i;
+  const pc = Math.round(probs[best] * 100);
+  const nmEl = document.getElementById("nm-" + task);
+  const uncertain = probs[best] < threshold;
+  nmEl.textContent = uncertain ? "incertain" : labels[task][best];
+  nmEl.classList.toggle("uncertain", uncertain);
+  document.getElementById("pc-" + task).textContent = pc + "%";
+  document.getElementById("bf-" + task).style.width = pc + "%";
+}
+
+init();
+</script>
+</body>
+</html>

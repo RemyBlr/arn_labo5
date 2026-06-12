@@ -1,0 +1,229 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
+<title>Field Classifier</title>
+<script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@4.20.0/dist/tf.min.js"></script>
+<style>
+  :root { --bg:#0f0f12; --panel:#1a1a20; --accent:#3ddc84; --text:#f0f0f0; --muted:#8a8a96; }
+  * { box-sizing:border-box; margin:0; padding:0; -webkit-tap-highlight-color:transparent; }
+  html, body { height:100%; background:var(--bg); color:var(--text);
+    font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif; }
+  body { display:flex; flex-direction:column; overflow:hidden; }
+  header { padding:calc(12px + env(safe-area-inset-top)) 16px 8px; text-align:center;
+    border-bottom:1px solid #26262e; }
+  header h1 { font-size:16px; letter-spacing:2px; text-transform:uppercase; font-weight:700; }
+  header .sub { font-size:11px; color:var(--muted); margin-top:2px; }
+  #stage { position:relative; flex:1; min-height:0; background:#000;
+    display:flex; align-items:center; justify-content:center; overflow:hidden; }
+  #video { width:100%; height:100%; object-fit:cover; }
+  #status { position:absolute; inset:0; display:flex; align-items:center;
+    justify-content:center; text-align:center; padding:24px; font-size:14px;
+    color:var(--muted); background:#000; }
+  #verdict { position:absolute; top:12px; left:12px; right:12px;
+    background:rgba(0,0,0,0.55); backdrop-filter:blur(8px);
+    border-radius:14px; padding:12px 14px; display:none; }
+  #verdict.show { display:block; }
+  #topline { display:flex; align-items:baseline; justify-content:space-between; gap:10px; }
+  #topname { font-size:18px; font-weight:700; text-transform:capitalize; }
+  #topconf { font-size:14px; color:var(--muted); font-variant-numeric:tabular-nums; }
+  #bars { padding:10px 14px 4px; }
+  .bar-row { margin-bottom:8px; }
+  .bar-label { display:flex; justify-content:space-between; font-size:12px; margin-bottom:3px; }
+  .bar-label .nm { text-transform:capitalize; }
+  .bar-label .pc { color:var(--muted); font-variant-numeric:tabular-nums; }
+  .bar-track { height:6px; background:#2a2a33; border-radius:3px; overflow:hidden; }
+  .bar-fill { height:100%; width:0%; border-radius:3px; background:var(--accent);
+    transition:width 0.15s ease; }
+  footer { background:var(--panel); padding:12px 16px calc(12px + env(safe-area-inset-bottom));
+    border-top:1px solid #26262e; }
+  .controls { display:flex; gap:10px; align-items:center; }
+  button { flex:0 0 auto; background:#2a2a33; color:var(--text); border:none;
+    border-radius:10px; padding:10px 14px; font-size:13px; font-weight:600; cursor:pointer; }
+  button:active { background:#34343f; }
+  .slider-wrap { flex:1; }
+  .slider-wrap label { font-size:11px; color:var(--muted); display:flex;
+    justify-content:space-between; margin-bottom:4px; }
+  input[type=range] { width:100%; accent-color:var(--accent); }
+</style>
+</head>
+<body>
+  <header>
+    <h1 id="appTitle">Field Classifier</h1>
+    <div class="sub">Transfer learning &middot; MobileNetV2</div>
+  </header>
+  <div id="stage">
+    <video id="video" playsinline muted autoplay></video>
+    <div id="status">Loading model&hellip;</div>
+    <div id="verdict">
+      <div id="topline"><span id="topname">&mdash;</span><span id="topconf"></span></div>
+    </div>
+  </div>
+  <footer>
+    <div id="bars"></div>
+    <div class="controls">
+      <button id="flipBtn">&#8634; Flip</button>
+      <div class="slider-wrap">
+        <label>Unknown threshold <span id="thVal">60%</span></label>
+        <input type="range" id="thresh" min="0" max="95" value="60" step="5">
+      </div>
+    </div>
+  </footer>
+
+<script>
+/* =====================================================================
+   ====================  EDIT THIS BLOCK ONLY  =========================
+   =====================================================================
+
+   1. APP_TITLE  - whatever you want shown at the top of the screen.
+
+   2. LABELS     - your class names. Paste EXACTLY what the notebook
+                   prints from:  print(list(LABEL_NAMES))
+                   The order matters! It is alphabetical (sorted).
+                   The app shows one bar per label automatically, so
+                   3 classes or 7 classes both just work.
+
+                   --- OR ---  leave LABELS = null  and the app will
+                   read the names from a "labels.json" file you place
+                   next to this page (a JSON list of strings). Then you
+                   never edit this file at all - you only swap the model
+                   folder and labels.json.
+
+   3. INPUT_SIZE - the image size your model expects. 224 for the
+                   standard MobileNetV2 setup in the course notebook.
+
+   You do NOT edit anything below the line. To use a new model, just
+   replace the "model/" folder (model.json + the .bin files) that sits
+   next to this HTML file.
+   ===================================================================== */
+
+const APP_TITLE  = "Classifier";
+const LABELS     = null;   // labels loaded automatically from model/labels.json
+const INPUT_SIZE = 224;
+const MODEL_URL  = "model/model.json";       // keep the folder named "model/"
+
+/* =====================================================================
+   ===================  DO NOT EDIT BELOW HERE  ========================
+   ===================================================================== */
+
+let model = null, stream = null, facing = "environment", threshold = 0.60;
+let labels = LABELS;
+const video    = document.getElementById("video");
+const statusEl = document.getElementById("status");
+const verdictEl= document.getElementById("verdict");
+const topnameEl= document.getElementById("topname");
+const topconfEl= document.getElementById("topconf");
+const barsEl   = document.getElementById("bars");
+document.getElementById("appTitle").textContent = APP_TITLE;
+
+function buildBars() {
+  barsEl.innerHTML = "";
+  labels.forEach(function(lab, i) {
+    const row = document.createElement("div");
+    row.className = "bar-row";
+    row.innerHTML =
+      '<div class="bar-label"><span class="nm">' + lab + '</span>' +
+      '<span class="pc" id="pc-' + i + '">0%</span></div>' +
+      '<div class="bar-track"><div class="bar-fill" id="bf-' + i + '"></div></div>';
+    barsEl.appendChild(row);
+  });
+}
+
+document.getElementById("thresh").addEventListener("input", function(e) {
+  threshold = e.target.value / 100;
+  document.getElementById("thVal").textContent = e.target.value + "%";
+});
+document.getElementById("flipBtn").addEventListener("click", async function() {
+  facing = facing === "environment" ? "user" : "environment";
+  await startCamera();
+});
+
+async function startCamera() {
+  if (stream) stream.getTracks().forEach(function(t){ t.stop(); });
+  try {
+    stream = await navigator.mediaDevices.getUserMedia({ video:{ facingMode:facing }, audio:false });
+    video.srcObject = stream;
+    await video.play();
+  } catch (err) {
+    statusEl.textContent = "Camera error: " + err.message;
+    statusEl.style.display = "flex";
+  }
+}
+
+async function init() {
+  try {
+    // If LABELS was left null, load them from labels.json
+    if (!labels) {
+      statusEl.textContent = "Loading labels...";
+      const r = await fetch("model/labels.json");
+      labels = await r.json();
+    }
+    statusEl.textContent = "Loading model...";
+    // model = await tf.loadLayersModel(MODEL_URL);
+    model = await tf.loadGraphModel(MODEL_URL);
+
+    // const outDim = model.outputs[0].shape.slice(-1)[0];
+    // if (outDim !== labels.length) {
+    //   statusEl.textContent = "Mismatch: model outputs " + outDim +
+    //     " classes but you listed " + labels.length +
+    //     " labels. Fix the LABELS list (or labels.json) to match your model.";
+    //   return;
+    // }
+
+    buildBars();
+    statusEl.textContent = "Starting camera...";
+    await startCamera();
+    statusEl.style.display = "none";
+    verdictEl.classList.add("show");
+    requestAnimationFrame(loop);
+  } catch (err) {
+    statusEl.textContent = 'Could not load model from "' + MODEL_URL +
+      '". Put the model/ folder (model.json + .bin) next to this file. (' + err.message + ')';
+  }
+}
+
+function preprocess() {
+  return tf.tidy(function() {
+    let img = tf.browser.fromPixels(video);
+    const h = img.shape[0], w = img.shape[1];
+    const side = Math.min(h, w);
+    const top  = Math.floor((h - side) / 2);
+    const left = Math.floor((w - side) / 2);
+    img = img.slice([top, left, 0], [side, side, 3]);
+    img = tf.image.resizeBilinear(img, [INPUT_SIZE, INPUT_SIZE]);
+    img = img.toFloat().div(255.0);
+    return img.expandDims(0);
+  });
+}
+
+let busy = false;
+async function loop() {
+  if (model && !busy && video.readyState >= 2) {
+    busy = true;
+    const input = preprocess();
+    const logits = model.predict(input);
+    const probs = await logits.data();
+    input.dispose(); logits.dispose();
+    render(probs);
+    busy = false;
+  }
+  requestAnimationFrame(loop);
+}
+
+function render(probs) {
+  let best = 0;
+  for (let i = 1; i < probs.length; i++) if (probs[i] > probs[best]) best = i;
+  labels.forEach(function(lab, i) {
+    const pc = Math.round(probs[i] * 100);
+    document.getElementById("pc-" + i).textContent = pc + "%";
+    document.getElementById("bf-" + i).style.width = pc + "%";
+  });
+  topnameEl.textContent = probs[best] < threshold ? "Uncertain" : labels[best];
+  topconfEl.textContent = Math.round(probs[best] * 100) + "%";
+}
+
+init();
+</script>
+</body>
+</html>
