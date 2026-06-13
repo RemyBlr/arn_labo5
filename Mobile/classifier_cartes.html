@@ -90,7 +90,7 @@
    INPUT_SIZE : 224 pour le MobileNetV2 du cours.
    ===================================================================== */
 
-const TASKS = ["couleur", "type", "figure", "chiffre"];
+const TASKS = ["couleur", "type", "symbole", "deck"];
 const INPUT_SIZE = 224;
 
 /* =====================================================================
@@ -154,7 +154,7 @@ async function init() {
     requestAnimationFrame(loop);
   } catch (err) {
     statusEl.textContent = "Impossible de charger les mod\u00e8les. V\u00e9rifie que les dossiers " +
-      "model_couleur/, model_type/, model_figure/ et model_chiffre/ (model.json + .bin + labels.json) " +
+      "model_couleur/, model_type/, model_symbole/ et model_deck/ (model.json + .bin + labels.json) " +
       "sont \u00e0 c\u00f4t\u00e9 de ce fichier. (" + err.message + ")";
   }
 }
